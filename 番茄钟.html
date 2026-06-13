@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>番茄钟</title>
+<style>
+  /* ========== 通用重置 ==========
+     去掉浏览器默认的 margin/padding，
+     box-sizing 让 padding 算进 width 里（布局更直观） */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* ========== 主题色变量 ==========
+     把所有颜色集中在这里，以后换主题只改这一块。
+     用 var(--名字) 的方式使用。 */
+  :root {
+    --bg: #1a1a2e;          /* 页面背景：深蓝近黑 */
+    --card: #16213e;        /* 卡片背景：稍亮的深蓝 */
+    --accent: #e94560;      /* 主题色（专注模式）：番茄红 */
+    --accent-soft: #ff6b6b; /* 主题色悬停态：更亮的红 */
+    --text: #eaeaea;        /* 主要文字：近白 */
+    --muted: #8a8aa0;       /* 次要文字：灰紫 */
+    --break: #4ecdc4;       /* 短休息色：青绿 */
+    --long-break: #95e1d3;  /* 长休息色：浅青 */
+  }
+
+  /* ========== 页面整体布局 ==========
+     flex 三件套：水平居中 + 垂直居中。
+     min-height: 100vh 让 body 至少一屏高。
+     overflow: hidden 防止圆环溢出产生滚动条。 */
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .container {
+    text-align: center;
+    padding: 40px 20px;
+  }
+
+  /* 顶部小标题：细字 + 大字距 + 灰色 + 大写，营造"高级感" */
+  h1 {
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 4px;
+    color: var(--muted);
+    margin-bottom: 30px;
+    text-transform: uppercase;
+  }
+
+  /* 模式切换按钮组：flex 让三个按钮排成一行 */
+  .modes {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 40px;
+  }
+
+  /* 模式按钮：默认是"未选中"的样子（透明底 + 灰边 + 灰字） */
+  .mode-btn {
+    background: transparent;
+    border: 1px solid var(--muted);
+    color: var(--muted);
+    padding: 8px 20px;
+    border-radius: 20px;     /* 圆角做成胶囊形状 */
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;    /* 颜色/边框 0.2 秒平滑变化 */
+    font-family: inherit;
+  }
+
+  /* 鼠标悬停：颜色变亮 */
+  .mode-btn:hover {
+    color: var(--text);
+    border-color: var(--text);
+  }
+
+  /* 选中态：反色（白底深字）——由 JS 加 .active 类名触发 */
+  .mode-btn.active {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+
+  /* ========== 圆环计时器容器 ==========
+     position: relative 是为了让它内部的 .time 能用 absolute 定位
+     叠在圆心。宽高 320×320 是一个圆+圆环的画布。 */
+  .timer-wrap {
+    position: relative;
+    width: 320px;
+    height: 320px;
+    margin: 0 auto 40px;
+  }
+
+  /* SVG 旋转 -90°：因为圆默认从 3 点钟方向开始画，
+     旋转到 12 点钟开始，更符合"时钟"的视觉习惯 */
+  .ring {
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 底层圆环：淡淡的灰白色，作为"跑道" */
+  .ring-bg {
+    fill: none;               /* 圆内部不填充 */
+    stroke: rgba(255, 255, 255, 0.05);
+    stroke-width: 4;
+  }
+
+  /* 进度圆环：默认红色，stroke-dashoffset 由 JS 实时改变来"走" */
+  .ring-progress {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 4;
+    stroke-linecap: round;    /* 线条两端圆头，更柔和 */
+    /* 两个 transition：圆环走 0.95s 平滑（配合 1s 的 tick），
+       颜色 0.4s 平滑切换 */
+    transition: stroke-dashoffset 0.95s linear, stroke 0.4s;
+  }
+
+  /* 当外层有 .break / .long-break 类名时，进度环换成对应颜色
+     —— 这是 JS 切颜色的关键：通过改类名，不直接改样式 */
+  .timer-wrap.break .ring-progress { stroke: var(--break); }
+  .timer-wrap.long-break .ring-progress { stroke: var(--long-break); }
+
+  /* ========== 中央时间数字 ==========
+     居中诀窍：先 top/left 50% 把左上角挪到中心，
+     再 translate(-50%, -50%) 把元素自身往回拉一半尺寸。
+     font-variant-numeric: tabular-nums 让数字等宽，
+     否则 1 和 8 宽度不同，时间会"晃"。 */
+  .time {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 64px;
+    font-weight: 200;
+    letter-spacing: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 时间下方那行小字（"保持专注"），叠在圆心稍下方 */
+  .label {
+    position: absolute;
+    top: calc(50% + 50px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 2px;
+  }
+
+  /* 控制按钮组：水平排列居中 */
+  .controls {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 30px;
+  }
+
+  /* 按钮基础样式 */
+  .btn {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: inherit;
+    cursor: pointer;
+    font-size: 14px;
+    letter-spacing: 1px;
+    padding: 12px 28px;
+    border-radius: 24px;       /* 大圆角胶囊 */
+    transition: all 0.2s;
+  }
+
+  /* 主按钮（开始/暂停）：实心红底 */
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+    min-width: 120px;          /* 固定宽度防止"开始"和"暂停"切换时按钮大小变 */
+  }
+
+  /* 休息模式下，主按钮换成青色（和圆环颜色一致） */
+  .timer-wrap.break .btn-primary,
+  .timer-wrap.long-break .btn-primary {
+    background: var(--break);
+    color: var(--bg);
+  }
+
+  /* 主按钮悬停：颜色变亮 + 微微放大 */
+  .btn-primary:hover {
+    background: var(--accent-soft);
+    transform: scale(1.03);
+  }
+
+  /* 次要按钮（重置/跳过）：透明底 + 灰字 */
+  .btn-secondary {
+    color: var(--muted);
+  }
+
+  .btn-secondary:hover {
+    color: var(--text);
+  }
+
+  /* ========== 底部统计区 ========== */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  /* 统计数字：大号细字 + 单独一行（display: block） */
+  .stat-num {
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 300;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  /* ========== 设置按钮（右上角齿轮） ========== */
+  .settings-btn {
+    position: fixed;     /* 固定在视口，不随页面滚动 */
+    top: 20px;
+    right: 20px;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 8px;
+  }
+
+  .settings-btn:hover { color: var(--text); }
+
+  /* ========== 设置弹窗（模态框） ==========
+     默认 display: none 隐藏；
+     通过 JS 加 .open 类名变成 flex 显示。 */
+  .modal {
+    display: none;
+    position: fixed;     /* 铺满整个视口 */
+    inset: 0;            /* 等价于 top/right/bottom/left: 0 */
+    background: rgba(0,0,0,0.7);  /* 半透明黑色遮罩 */
+    align-items: center;
+    justify-content: center;
+    z-index: 10;         /* 浮在所有内容之上 */
+  }
+
+  .modal.open { display: flex; }  /* 加 .open 才显示 */
+
+  /* 弹窗里的卡片 */
+  .modal-content {
+    background: var(--card);
+    padding: 30px;
+    border-radius: 16px;
+    width: 90%;
+    max-width: 360px;
+  }
+
+  .modal-content h2 {
+    font-size: 16px;
+    margin-bottom: 20px;
+    font-weight: 500;
+  }
+
+  /* 设置项：一行 = 左边文字 + 右边输入框，两端对齐 */
+  .setting-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    font-size: 14px;
+  }
+
+  .setting-row input {
+    width: 70px;
+    background: var(--bg);
+    border: 1px solid var(--muted);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    text-align: center;
+    font-family: inherit;
+  }
+
+  /* 弹窗底部"确定"按钮 */
+  .modal-close {
+    margin-top: 20px;
+    width: 100%;
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+
+<!-- 右上角的齿轮按钮：点击打开设置弹窗 -->
+<button class="settings-btn" id="settingsBtn" title="设置">⚙</button>
+
+<div class="container">
+  <h1>番茄钟</h1>
+
+  <!-- 三个模式切换按钮。data-mode 是自定义属性，JS 读取它来判断是哪种模式 -->
+  <div class="modes">
+    <button class="mode-btn active" data-mode="focus">专注</button>
+    <button class="mode-btn" data-mode="break">短休息</button>
+    <button class="mode-btn" data-mode="long-break">长休息</button>
+  </div>
+
+  <!--
+    圆形进度环实现原理：
+    1. 画两个圆：一个底层（灰色"跑道"）+ 一个上层（彩色"进度"）
+    2. 圆周长 = 2 * π * 半径 = 2 * π * 155 ≈ 973.89
+    3. stroke-dasharray="973.89"  = 把圆周长当成"一条连续的虚线"
+    4. stroke-dashoffset 从 0（满圆）变到 973.89（空白），就实现了"逐渐消失"
+       JS 里：(1 - remaining/total) 就是已完成的进度比例
+  -->
+  <div class="timer-wrap" id="timerWrap">
+    <svg class="ring" viewBox="0 0 320 320">
+      <circle class="ring-bg" cx="160" cy="160" r="155"/>
+      <circle class="ring-progress" id="ring" cx="160" cy="160" r="155"
+              stroke-dasharray="973.89" stroke-dashoffset="0"/>
+    </svg>
+    <div class="time" id="time">25:00</div>
+    <div class="label" id="label">保持专注</div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn-secondary" id="resetBtn">重置</button>
+    <button class="btn btn-primary" id="startBtn">开始</button>
+    <button class="btn btn-secondary" id="skipBtn">跳过</button>
+  </div>
+
+  <div class="stats">
+    <div>
+      <span class="stat-num" id="cycleCount">0</span>
+      今日完成
+    </div>
+    <div>
+      <span class="stat-num" id="totalTime">0</span>
+      专注分钟
+    </div>
+  </div>
+</div>
+
+<!-- 设置弹窗：默认隐藏，点齿轮或确定按钮切换 .open -->
+<div class="modal" id="settingsModal">
+  <div class="modal-content">
+    <h2>时长设置（分钟）</h2>
+    <div class="setting-row">
+      <span>专注</span>
+      <input type="number" id="setFocus" min="1" max="120" value="25">
+    </div>
+    <div class="setting-row">
+      <span>短休息</span>
+      <input type="number" id="setBreak" min="1" max="60" value="5">
+    </div>
+    <div class="setting-row">
+      <span>长休息</span>
+      <input type="number" id="setLongBreak" min="1" max="120" value="15">
+    </div>
+    <button class="modal-close" id="closeSettings">确定</button>
+  </div>
+</div>
+
+<script>
+  /* =====================================================
+     核心数据结构：所有"会变"的状态都集中在这里。
+     这是一种简单的"状态管理"思路——
+     改数据 → 调 render() → 页面跟着变。
+     ===================================================== */
+  const state = {
+    mode: 'focus',                                  // 当前模式
+    durations: {                                    // 三种模式各多少秒
+      focus: 25 * 60,
+      break: 5 * 60,
+      'long-break': 15 * 60,
+    },
+    remaining: 25 * 60,                             // 剩余秒数
+    total: 25 * 60,                                 // 总秒数（用于算进度比例）
+    running: false,                                 // 计时器是否在跑
+    interval: null,                                 // setInterval 的 id，用来停止
+    cycles: 0,                                      // 已完成的专注轮数
+    totalFocusSeconds: 0,                           // 累计专注秒数
+  };
+
+  /* 简化写法：$('time') 相当于 document.getElementById('time') */
+  const $ = id => document.getElementById(id);
+  const ring = $('ring');
+  // 圆周长 = 2πr，圆环的"总长度"，决定 dasharray 的最大值
+  const circumference = 2 * Math.PI * 155;
+
+  /* 把秒数格式化成"分:秒"，不足两位补 0
+     例：90 → "01:30" */
+  function formatTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  /* =====================================================
+     render() —— "把数据画到页面上"的最重要函数
+     任何状态变化后都会调它一次。
+     ===================================================== */
+  function render() {
+    // 1. 中央时间数字
+    $('time').textContent = formatTime(state.remaining);
+
+    // 2. 进度环：已完成的进度 = 1 - remaining/total
+    //    offset 从 0（满圆）到 circumference（空白）
+    const offset = circumference * (1 - state.remaining / state.total);
+    ring.style.strokeDashoffset = offset;
+
+    // 3. 统计数字
+    $('cycleCount').textContent = state.cycles;
+    $('totalTime').textContent = Math.floor(state.totalFocusSeconds / 60);
+
+    // 4. 提示文字
+    const labels = { focus: '保持专注', break: '短休息一下', 'long-break': '长休息一下' };
+    $('label').textContent = labels[state.mode];
+
+    // 5. 切换外层类名（break/long-break），让 CSS 自动换圆环/按钮颜色
+    const wrap = $('timerWrap');
+    wrap.classList.toggle('break', state.mode === 'break');
+    wrap.classList.toggle('long-break', state.mode === 'long-break');
+
+    // 6. 按钮文字：跑的时候显示"暂停"，停了显示"开始"
+    $('startBtn').textContent = state.running ? '暂停' : '开始';
+  }
+
+  /* 切换模式（点顶部三个按钮触发） */
+  function switchMode(mode) {
+    // 切换前先停掉当前计时器
+    if (state.running) toggle();
+    state.mode = mode;
+    state.total = state.durations[mode];
+    state.remaining = state.total;
+
+    // 把"选中"样式挪到当前按钮上
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    render();
+  }
+
+  /* 开始 / 暂停切换（点主按钮触发） */
+  function toggle() {
+    state.running = !state.running;
+    if (state.running) {
+      // 每 1000 毫秒（1秒）调一次 tick()
+      state.interval = setInterval(tick, 1000);
+    } else {
+      // 停止定时器
+      clearInterval(state.interval);
+    }
+    render();
+  }
+
+  /* 每秒执行一次（定时器驱动） */
+  function tick() {
+    if (state.remaining > 0) {
+      state.remaining--;                            // 剩余时间减 1
+      if (state.mode === 'focus') {
+        state.totalFocusSeconds++;                  // 累计专注时长
+      }
+      render();
+    } else {
+      finish();                                     // 时间到
+    }
+  }
+
+  /* 时间到了的处理 */
+  function finish() {
+    clearInterval(state.interval);
+    state.running = false;
+    beep();                                         // 播放提示音
+
+    if (state.mode === 'focus') {
+      state.cycles++;                               // 完成数 +1
+      // 经典番茄工作法：每完成 4 个专注，进入一次长休息
+      const next = (state.cycles % 4 === 0) ? 'long-break' : 'break';
+      switchMode(next);
+    } else {
+      // 休息完回到专注
+      switchMode('focus');
+    }
+
+    // 1.5 秒后自动开始下一阶段（让用户有个喘息的时间听到提示音）
+    setTimeout(() => toggle(), 1500);
+  }
+
+  /* 重置（把当前模式的时间恢复到初始值） */
+  function reset() {
+    if (state.running) toggle();                    // 先暂停
+    state.remaining = state.durations[state.mode];
+    state.total = state.remaining;
+    render();
+  }
+
+  /* 跳过：直接当作"时间到"处理 */
+  function skip() {
+    finish();
+  }
+
+  /* =====================================================
+     beep() —— 用 Web Audio 现场合成提示音
+     原理：
+     - AudioContext 是浏览器的"音频工厂"
+     - Oscillator（振荡器）发出指定频率的声波
+     - Gain（音量控制器）控制声音大小
+     - 用 setValueAtTime + linearRampToValueAtTime 制造"淡入淡出"
+     好处：不需要任何音频文件，纯代码生成
+     ===================================================== */
+  function beep() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // 三个音符（频率 Hz）：880 是 A5，数字越大音越高
+    const notes = [880, 1100, 1320];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();          // 振荡器 = 发声
+      const gain = ctx.createGain();                // 增益 = 音量控制
+
+      // 把振荡器 → 音量控制器 → 音箱，串成一条链
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.frequency.value = freq;                   // 设定音高
+      osc.type = 'sine';                            // 正弦波，声音最"纯"
+
+      // 音量包络：先 0 → 升到 0.2（淡入）→ 降到 0.001（淡出）
+      // 每个音符错开 i * 0.18 秒，依次响起
+      const t = ctx.currentTime + i * 0.18;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.2, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+
+      osc.start(t);                                 // 按时开始发声
+      osc.stop(t + 0.16);                           // 0.16 秒后停
+    });
+  }
+
+  /* =====================================================
+     事件绑定：把"用户操作"和"要执行的函数"连起来
+     ===================================================== */
+
+  // 给所有模式按钮绑点击事件
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.addEventListener('click', () => switchMode(b.dataset.mode));
+  });
+  $('startBtn').addEventListener('click', toggle);
+  $('resetBtn').addEventListener('click', reset);
+  $('skipBtn').addEventListener('click', skip);
+
+  // 打开设置弹窗
+  $('settingsBtn').addEventListener('click', () => $('settingsModal').classList.add('open'));
+
+  // 确定按钮：读取输入框数字，更新时长配置
+  $('closeSettings').addEventListener('click', () => {
+    // parseInt 解析输入值，|| 25 兜底（防止输入空或非数字）
+    const f = parseInt($('setFocus').value) || 25;
+    const b = parseInt($('setBreak').value) || 5;
+    const l = parseInt($('setLongBreak').value) || 15;
+    state.durations = { focus: f * 60, break: b * 60, 'long-break': l * 60 };
+
+    // 只有没在跑的时候才立即更新当前显示
+    if (!state.running) {
+      state.total = state.durations[state.mode];
+      state.remaining = state.total;
+      render();
+    }
+    $('settingsModal').classList.remove('open');
+  });
+
+  // 点弹窗遮罩（不是卡片本身）也能关闭
+  $('settingsModal').addEventListener('click', e => {
+    if (e.target === $('settingsModal')) $('settingsModal').classList.remove('open');
+  });
+
+  /* =====================================================
+     键盘快捷键
+     - 空格：开始/暂停
+     - R：重置
+     输入框里敲键盘时不触发（不然在设置时长时按空格就尴尬了）
+     ===================================================== */
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;       // 在输入框里就不管
+    if (e.code === 'Space') {
+      e.preventDefault();                           // 阻止空格滚动页面
+      toggle();
+    }
+    if (e.key === 'r' || e.key === 'R') reset();
+  });
+
+  // 首次渲染：让页面显示初始状态
+  render();
+</script>
+</body>
+</html>
